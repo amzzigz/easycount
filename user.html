@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>简易计量系统 - 用户端 (腾讯云版)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- 引入腾讯云 CloudBase SDK -->
+    <script src="https://static.cloudbase.net/cloudbase-js-sdk/2.17.3/cloudbase.full.js"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', 'Noto Sans SC', sans-serif; }
+        .form-select, .form-input { -webkit-appearance: none; -moz-appearance: none; appearance: none; }
+        .loader { @apply w-12 h-12 border-4 border-blue-500 border-t-transparent rounded-full animate-spin; }
+    </style>
+</head>
+<body class="bg-gray-100 dark:bg-gray-900 text-gray-900 dark:text-gray-200 min-h-screen flex flex-col items-center p-4">
+
+    <div id="loading-overlay" class="fixed inset-0 bg-white dark:bg-gray-900 z-[100] flex flex-col items-center justify-center text-center p-4">
+        <div class="loader"></div>
+        <p id="loading-text" class="mt-4 text-lg font-semibold">正在加载...</p>
+    </div>
+
+    <div id="app-container" class="w-full max-w-lg mx-auto hidden">
+        <header class="bg-white dark:bg-gray-800 shadow-md rounded-xl p-4 mb-6">
+            <div class="flex justify-between items-center text-xl">
+                <div><span class="font-bold">用户:</span> <span id="user-name"></span></div>
+                <div id="current-time" class="font-mono"></div>
+            </div>
+        </header>
+
+        <main class="bg-white dark:bg-gray-800 shadow-md rounded-xl p-6 mb-6">
+            <h2 class="text-2xl font-bold mb-4 text-center">提交新纪录</h2>
+            <form id="record-form" class="space-y-5">
+                <div class="grid grid-cols-3 items-center">
+                    <label for="model-select" class="text-lg font-semibold">型号:</label>
+                    <select id="model-select" class="col-span-2 form-select w-full p-3 text-lg bg-gray-200 dark:bg-gray-700 border-2 border-transparent focus:border-blue-500 focus:ring-blue-500 rounded-lg transition">
+                        <option value="">-- 请选择型号 --</option>
+                    </select>
+                </div>
+                <div id="dependent-fields" class="space-y-5 opacity-50 transition">
+                    <div class="grid grid-cols-3 items-center"><label for="color-select" class="text-lg font-semibold">颜色:</label><select id="color-select" disabled class="col-span-2 form-select w-full p-3 text-lg bg-gray-200 dark:bg-gray-700 rounded-lg"></select></div>
+                    <div class="grid grid-cols-3 items-center"><label for="size-select" class="text-lg font-semibold">码数:</label><select id="size-select" disabled class="col-span-2 form-select w-full p-3 text-lg bg-gray-200 dark:bg-gray-700 rounded-lg"></select></div>
+                    <div class="grid grid-cols-3 items-center"><label for="process-select" class="text-lg font-semibold">工序:</label><select id="process-select" disabled class="col-span-2 form-select w-full p-3 text-lg bg-gray-200 dark:bg-gray-700 rounded-lg"></select></div>
+                    <div class="grid grid-cols-3 items-center"><label for="quantity-input" class="text-lg font-semibold">数量:</label><input type="number" id="quantity-input" disabled placeholder="请输入数量" class="col-span-2 form-input w-full p-3 text-lg bg-gray-200 dark:bg-gray-700 rounded-lg"></div>
+                </div>
+                <button type="submit" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold text-xl py-4 rounded-lg transition-transform transform hover:scale-105">提交</button>
+            </form>
+        </main>
+
+        <section class="bg-white dark:bg-gray-800 shadow-md rounded-xl p-6">
+            <h2 class="text-2xl font-bold mb-4 text-center">我的记录</h2>
+            <div id="record-list" class="space-y-3"></div>
+            <div id="empty-message" class="hidden text-center text-gray-500 py-8"><p class="text-xl">暂无记录</p></div>
+        </section>
+    </div>
+    <div id="toast" class="fixed bottom-5 right-5 bg-green-500 text-white py-3 px-6 rounded-lg shadow-xl text-lg opacity-0 translate-y-10 transition-all duration-500"></div>
+    
+    <script>
+    window.onload = () => {
+        if (typeof cloudbase === 'undefined') {
+            document.getElementById('loading-text').innerHTML = '<p class="text-red-500">腾讯云SDK加载失败，请检查网络或浏览器设置。</p>';
+            document.querySelector('#loading-overlay .loader').style.display = 'none';
+            return;
+        }
+        
+        // =================================================================================
+        // 腾讯云 CloudBase 初始化
+        // =================================================================================
+        const app = cloudbase.init({
+            env: "cloud1-0g8v1tvz2ddf6e59" // <--- 在这里粘贴您的腾讯云环境ID
+        });
+        const db = app.database();
+        const _ = db.command;
+        // =================================================================================
+
+        const loadingOverlay = document.getElementById('loading-overlay');
+        const loadingText = document.getElementById('loading-text');
+        const appContainer = document.getElementById('app-container');
+        
+        let allModels = [];
+        let currentUserId = null;
+
+        const timeEl = document.getElementById('current-time');
+        const userNameEl = document.getElementById('user-name');
+        const modelSelect = document.getElementById('model-select');
+        const dependentFieldsContainer = document.getElementById('dependent-fields');
+        const colorSelect = document.getElementById('color-select');
+        const sizeSelect = document.getElementById('size-select');
+        const processSelect = document.getElementById('process-select');
+        const quantityInput = document.getElementById('quantity-input');
+        const form = document.getElementById('record-form');
+        const recordList = document.getElementById('record-list');
+        const emptyMessage = document.getElementById('empty-message');
+        const toast = document.getElementById('toast');
+        const allDependentInputs = [colorSelect, sizeSelect, processSelect, quantityInput];
+
+        const formatDateTime = (date) => {
+            if (!date) return '-';
+            // CloudBase 可能返回时间为对象（如 { $date: ... }），需兼容
+            let d;
+            if (typeof date === 'object' && date.$date) {
+                d = new Date(date.$date);
+            } else {
+                d = new Date(date);
+            }
+            return isNaN(d.getTime()) ? '-' : d.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+        };
+        const updateClock = () => { timeEl.textContent = new Date().toLocaleTimeString('zh-CN'); };
+        const showToast = (message) => { toast.textContent = message; toast.classList.remove('opacity-0', 'translate-y-10'); setTimeout(() => { toast.classList.add('opacity-0', 'translate-y-10'); }, 3000); };
+
+        function populateSelect(selectElement, options) {
+            selectElement.innerHTML = '';
+            options.forEach(option => {
+                const opt = document.createElement('option');
+                opt.value = option;
+                opt.textContent = option;
+                selectElement.appendChild(opt);
+            });
+        }
+
+        function renderRecords(records) {
+            recordList.innerHTML = '';
+            emptyMessage.classList.toggle('hidden', records.length > 0);
+            records.forEach(record => {
+                const statusClass = record.status === 'approved' ? 'bg-green-100 dark:bg-green-900/50 border-green-500' : 'bg-red-100 dark:bg-red-900/50 border-red-500';
+                const statusText = record.status === 'approved' ? '已审核' : (record.status === 'rejected' ? '已拒绝' : '待审核');
+                const recordElement = document.createElement('div');
+                recordElement.className = `p-4 rounded-lg border-l-4 ${statusClass} shadow-sm`;
+                recordElement.innerHTML = `<div class="flex justify-between items-start mb-2"><p class="font-bold text-lg">${record.model} / ${record.process}</p><p class="font-bold text-xl">${record.quantity} 件</p></div><div class="text-sm text-gray-600 dark:text-gray-400 space-y-1"><p><strong>颜色/码数:</strong> ${record.color} / ${record.size}</p><p><strong>提交时间:</strong> ${formatDateTime(record.submitTime)}</p></div><div class="mt-2 text-right font-semibold ${record.status === 'approved' ? 'text-green-600 dark:text-green-400' : 'text-red-500 dark:text-red-400'}">${statusText}</div>`;
+                recordList.appendChild(recordElement);
+            });
+        }
+
+        async function main() {
+            try {
+                // 1. Get User ID from URL
+                const params = new URLSearchParams(window.location.search);
+                currentUserId = params.get('userId');
+                if (!currentUserId) {
+                    throw new Error('无效的用户ID。请通过管理员提供的二维码或链接访问。');
+                }
+
+                // 2. Authenticate
+                loadingText.textContent = "正在进行身份验证...";
+                const auth = app.auth();
+                const loginState = await auth.getLoginState();
+                if (!loginState) {
+                    await auth.anonymousAuthProvider().signIn();
+                }
+
+                // 3. Fetch User and Models Data
+                loadingText.textContent = "正在加载初始数据...";
+                const [userRes, modelsRes] = await Promise.all([
+                    db.collection('users').doc(currentUserId).get(),
+                    db.collection('models').get()
+                ]);
+
+                if (!userRes.data || userRes.data.length === 0) {
+                    throw new Error('用户不存在。请确认用户ID是否正确。');
+                }
+                userNameEl.textContent = userRes.data[0].name;
+
+                allModels = modelsRes.data;
+                modelSelect.innerHTML = '<option value="">-- 请选择型号 --</option>';
+                allModels.forEach(m => modelSelect.innerHTML += `<option value="${m.name}">${m.name}</option>`);
+                
+                // 4. If all essential data is loaded, set up event listeners
+                modelSelect.addEventListener('change', () => {
+                    const isModelSelected = modelSelect.value !== '';
+                    allDependentInputs.forEach(input => input.disabled = !isModelSelected);
+                    dependentFieldsContainer.classList.toggle('opacity-50', !isModelSelected);
+                    if (isModelSelected) {
+                        const selectedModel = allModels.find(m => m.name === modelSelect.value);
+                        if (selectedModel) {
+                            populateSelect(colorSelect, selectedModel.colors);
+                            populateSelect(sizeSelect, selectedModel.sizes);
+                            const processNames = selectedModel.processes.map(p => p.name);
+                            populateSelect(processSelect, processNames);
+                        }
+                    }
+                });
+
+                form.addEventListener('submit', async (e) => {
+                    e.preventDefault();
+                    const newRecord = {
+                        userId: currentUserId,
+                        model: modelSelect.value,
+                        color: colorSelect.value,
+                        size: sizeSelect.value,
+                        process: processSelect.value,
+                        quantity: parseInt(quantityInput.value),
+                        status: 'pending',
+                        submitTime: new Date(),
+                        reviewTime: null
+                    };
+                    if (Object.values(newRecord).some(v => !v && v !== null)) {
+                        alert('请填写所有字段！');
+                        return;
+                    }
+                    try {
+                        await db.collection('records').add(newRecord);
+                        showToast('提交成功，等待审核!');
+                        form.reset();
+                        allDependentInputs.forEach(input => input.disabled = true);
+                        dependentFieldsContainer.classList.add('opacity-50');
+                    } catch (error) {
+                        console.error("Error adding record: ", error);
+                        showToast('提交失败，请重试。');
+                    }
+                });
+
+                // 5. Show the app
+                loadingOverlay.classList.add('hidden');
+                appContainer.classList.remove('hidden');
+
+                // 6. Setup real-time listeners now that the app is visible
+                updateClock();
+                setInterval(updateClock, 1000);
+
+                // Listener for models (in case they change while app is open)
+                db.collection('models').watch({
+                    onChange: (snapshot) => {
+                        allModels = snapshot.docs;
+                        const currentModel = modelSelect.value;
+                        modelSelect.innerHTML = '<option value="">-- 请选择型号 --</option>';
+                        allModels.forEach(m => modelSelect.innerHTML += `<option value="${m.name}">${m.name}</option>`);
+                        if (allModels.some(m => m.name === currentModel)) {
+                            modelSelect.value = currentModel;
+                        }
+                    },
+                    onError: console.error
+                });
+
+                // Listener for user's records
+                db.collection('records').where({ userId: currentUserId }).orderBy('submitTime', 'desc').watch({
+                    onChange: (snapshot) => {
+                        renderRecords(snapshot.docs);
+                    },
+                    onError: console.error
+                });
+
+            } catch (error) {
+                console.error("App initialization failed:", error);
+                loadingText.innerHTML = `<p class="text-red-500 text-lg">加载失败: ${error.message}</p>`;
+                const loader = loadingOverlay.querySelector('.loader');
+                if(loader) loader.style.display = 'none';
+            }
+        }
+        
+        main();
+    };
+    </script>
+</body>
+</html>
