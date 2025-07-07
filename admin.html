@@ -394,7 +394,7 @@
                 const user = allUsers.find(u => u._id === id);
                 if (user) {
                     qrcodeContainer.innerHTML = '';
-                    const userAppUrl = `./user.html?userId=${user._id}`;
+                    const userAppUrl = `https://amzzigz.github.io/easycount/user.html?userId=${user._id}`;
                     new QRCode(qrcodeContainer, { text: userAppUrl, width: 200, height: 200 });
                     qrUserName.textContent = `用户: ${user.name}`;
                     showModal(qrModal);
